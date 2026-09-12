@@ -1,0 +1,804 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>中秋博饼识别器</title>
+<style>
+  :root {
+    --bg: #241a2e;
+    --panel: #2f2340;
+    --panel-2: #382a4d;
+    --accent: #e0455f;
+    --accent-2: #f2b134;
+    --text: #f4ecff;
+    --text-dim: #c3b3d9;
+    --ok: #52c98c;
+    --warn: #f2b134;
+    --line: #4a3a63;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+  }
+  body {
+    padding: 16px;
+    padding-bottom: 40px;
+    max-width: 720px;
+    margin: 0 auto;
+  }
+  h1 {
+    font-size: 1.35rem;
+    margin: 4px 0 2px;
+    text-align: center;
+  }
+  .subtitle {
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    margin-bottom: 16px;
+  }
+  .panel {
+    background: var(--panel);
+    border-radius: 14px;
+    padding: 14px;
+    margin-bottom: 14px;
+    border: 1px solid var(--line);
+  }
+  .camera-wrap {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    background: #000;
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  #video { display: none; }
+  #overlay {
+    width: 100%;
+    height: 100%;
+    display: block;
+    touch-action: manipulation;
+  }
+  .camera-hint {
+    position: absolute;
+    inset: auto 0 0 0;
+    padding: 8px 10px;
+    font-size: 0.78rem;
+    color: #fff;
+    background: linear-gradient(to top, rgba(0,0,0,.65), rgba(0,0,0,0));
+    text-align: center;
+    pointer-events: none;
+  }
+  .btn-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+  }
+  button {
+    font: inherit;
+    border: none;
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 0.9rem;
+    cursor: pointer;
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--line);
+    flex: 1 1 auto;
+    min-width: 84px;
+  }
+  button.primary {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+    font-weight: 600;
+  }
+  button.secondary {
+    background: transparent;
+  }
+  button:active { transform: scale(0.97); }
+  button:disabled { opacity: 0.45; cursor: default; }
+
+  .status-line {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    margin-top: 8px;
+    min-height: 1.2em;
+    text-align: center;
+  }
+
+  .dice-row {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    margin: 12px 0 6px;
+    flex-wrap: wrap;
+  }
+  .die-chip {
+    width: 46px;
+    height: 46px;
+    border-radius: 10px;
+    background: var(--panel-2);
+    border: 2px solid var(--line);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: var(--text);
+    cursor: pointer;
+    user-select: none;
+  }
+  .die-chip.confident { border-color: var(--ok); }
+  .die-chip.unsure { border-color: var(--warn); color: var(--warn); }
+  .die-chip.empty { color: var(--text-dim); border-style: dashed; }
+
+  .result-box {
+    text-align: center;
+    padding: 16px 10px;
+    border-radius: 12px;
+    background: var(--panel-2);
+    min-height: 64px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+  }
+  .result-box .top-name {
+    font-size: 1.5rem;
+    font-weight: 800;
+    color: var(--accent-2);
+  }
+  .result-box .top-en {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+  }
+  .result-box .none {
+    font-size: 1.1rem;
+    color: var(--text-dim);
+  }
+  .extra-matches {
+    margin-top: 8px;
+    font-size: 0.82rem;
+    color: var(--text-dim);
+    text-align: center;
+  }
+  .extra-matches span {
+    display: inline-block;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 2px 8px;
+    margin: 2px;
+  }
+
+  details {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+  }
+  details summary {
+    cursor: pointer;
+    color: var(--text);
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+  .rules-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+    margin-top: 8px;
+  }
+  .rules-table td {
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--line);
+  }
+  .rules-table td:first-child {
+    white-space: nowrap;
+    color: var(--text);
+  }
+  .note-box {
+    font-size: 0.78rem;
+    color: var(--text-dim);
+    background: rgba(242,177,52,0.08);
+    border: 1px solid rgba(242,177,52,0.35);
+    border-radius: 10px;
+    padding: 8px 10px;
+    margin-top: 10px;
+    line-height: 1.5;
+  }
+  label.field {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    margin: 8px 0;
+  }
+  input[type=range] { flex: 1; }
+  .manual-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 6px;
+  }
+  select.manual-die {
+    width: 100%;
+    padding: 8px 2px;
+    text-align: center;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--panel-2);
+    color: var(--text);
+    font-size: 1rem;
+  }
+</style>
+</head>
+<body>
+
+  <h1>🥮 中秋博饼识别器</h1>
+  <div class="subtitle">摄像头对准碗里的 6 颗骰子，自动读点数、报奖项</div>
+
+  <div class="panel">
+    <div class="camera-wrap">
+      <video id="video" playsinline muted autoplay></video>
+      <canvas id="overlay"></canvas>
+      <div class="camera-hint">提示：骰子放在深色碗/垫子上、光线均匀，识别更准。点击骰子上的方框可手动纠正点数。</div>
+    </div>
+    <div class="btn-row">
+      <button id="btnStart" class="primary">开始摄像头</button>
+      <button id="btnSwitch" disabled>切换摄像头</button>
+      <button id="btnPause" disabled>暂停识别</button>
+    </div>
+    <div class="status-line" id="statusLine">尚未开启摄像头</div>
+
+    <details style="margin-top:10px;">
+      <summary>识别参数（识别不准时可调整）</summary>
+      <label class="field">
+        亮度阈值微调
+        <input type="range" id="thresholdAdjust" min="-60" max="60" value="0" step="2" />
+      </label>
+      <label class="field">
+        处理清晰度（越高越准但越慢）
+        <input type="range" id="procWidth" min="320" max="720" value="480" step="40" />
+      </label>
+    </details>
+  </div>
+
+  <div class="panel">
+    <div class="dice-row" id="diceRow">
+      <div class="die-chip empty">?</div>
+      <div class="die-chip empty">?</div>
+      <div class="die-chip empty">?</div>
+      <div class="die-chip empty">?</div>
+      <div class="die-chip empty">?</div>
+      <div class="die-chip empty">?</div>
+    </div>
+    <div class="result-box" id="resultBox">
+      <div class="none">等待识别 6 颗骰子…</div>
+    </div>
+    <div class="extra-matches" id="extraMatches"></div>
+  </div>
+
+  <div class="panel">
+    <details>
+      <summary>手动输入骰子点数（摄像头不方便时使用）</summary>
+      <div class="manual-grid">
+        <select class="manual-die" data-i="0"></select>
+        <select class="manual-die" data-i="1"></select>
+        <select class="manual-die" data-i="2"></select>
+        <select class="manual-die" data-i="3"></select>
+        <select class="manual-die" data-i="4"></select>
+        <select class="manual-die" data-i="5"></select>
+      </div>
+      <div class="btn-row">
+        <button id="btnManualCompute" class="primary">按手动输入计算奖项</button>
+      </div>
+    </details>
+  </div>
+
+  <div class="panel">
+    <details>
+      <summary>博饼奖项规则（第十九届中秋晚会版）</summary>
+      <table class="rules-table">
+        <tr><td>一秀</td><td>1 个 4 点</td></tr>
+        <tr><td>二举</td><td>2 个 4 点</td></tr>
+        <tr><td>四进</td><td>4 个相同点数（4 点除外）</td></tr>
+        <tr><td>三红</td><td>3 个 4 点</td></tr>
+        <tr><td>对堂</td><td>1～6 各一个（顺子）</td></tr>
+        <tr><td>状元一 · 六红</td><td>6 个都是 4 点</td></tr>
+        <tr><td>状元二 · 六黑</td><td>6 个都是 6 点</td></tr>
+        <tr><td>状元三 · 状元插金花</td><td>4 个 4 点 + 其余 2 个相同（一对）</td></tr>
+        <tr><td>状元四 · 遍地锦</td><td>4 个 4 点 + 其余 2 个不同且相加为 7</td></tr>
+        <tr><td>状元五 · 五红</td><td>5 个 4 点</td></tr>
+        <tr><td>状元六 · 五子登科</td><td>5 个 3 点</td></tr>
+        <tr><td>状元七 · 四红</td><td>4 个 4 点（其余两个不属于以上情形）</td></tr>
+      </table>
+      <div class="note-box">
+        说明：一秀～状元的分级顺序和一/二/四/三/对堂/六红/六黑/五红/四红等定义，来自规则原文与图示，可以确认。但「状元三 金花」「状元四 遍地锦」「状元七 四红」这三项在原始规则单上对应的骰子照片有印刷/排版错误（第 9 项六颗骰子图示明显不是实际点数），因此“其余两个骰子”的精确判定采用了常见民间惯例（一对＝金花，两个不同点数且相加为 7＝遍地锦，其余情况＝四红）。如果与你手上的实体规则卡说法不同，请以实体规则卡为准——不影响“中了状元”这个大结果，只影响细分头衔的名字。
+      </div>
+    </details>
+  </div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ------------------------------------------------------------------
+  // 1. Prize rule engine (unit-tested separately before being embedded)
+  // ------------------------------------------------------------------
+  function computePrizes(dice) {
+    const counts = [0, 0, 0, 0, 0, 0, 0]; // counts[1..6]
+    for (const d of dice) counts[d]++;
+    const sorted = [...dice].sort((a, b) => a - b);
+    const isSequence = sorted.join(',') === '1,2,3,4,5,6';
+    const others = counts[4] === 4 ? dice.filter((d) => d !== 4) : null;
+
+    const matches = [];
+
+    if (counts[4] === 6) matches.push({ rank: 1, zh: '六红（状元一）', en: 'Six Fours · Champion 1' });
+    if (counts[6] === 6) matches.push({ rank: 2, zh: '六黑（状元二）', en: 'Six Sixes · Champion 2' });
+    if (others) {
+      const isPair = others[0] === others[1];
+      const isDistinctSum7 = others[0] !== others[1] && (others[0] + others[1] === 7);
+      if (isPair) matches.push({ rank: 3, zh: '状元插金花（状元三）', en: 'Golden Flower · Champion 3' });
+      else if (isDistinctSum7) matches.push({ rank: 4, zh: '遍地锦（状元四）', en: 'Brocade All Around · Champion 4' });
+      else matches.push({ rank: 7, zh: '四红（状元七）', en: 'Four Fours · Champion 7' });
+    }
+    if (counts[4] === 5) matches.push({ rank: 5, zh: '五红（状元五）', en: 'Five Fours · Champion 5' });
+    if (counts[3] >= 5) matches.push({ rank: 6, zh: '五子登科（状元六）', en: 'Five Sons Are Scholars · Champion 6' });
+
+    if (isSequence) matches.push({ rank: 8, zh: '对堂（榜眼＋探花）', en: 'Second Prize' });
+    if (counts[4] === 3) matches.push({ rank: 9, zh: '三红', en: 'Third Prize' });
+    for (const v of [1, 2, 3, 5, 6]) {
+      if (counts[v] >= 4) matches.push({ rank: 10, zh: `四进（${v} 点 ×4）`, en: 'Fourth Prize' });
+    }
+    if (counts[4] === 2) matches.push({ rank: 11, zh: '二举', en: 'Fifth Prize' });
+    if (counts[4] === 1) matches.push({ rank: 12, zh: '一秀', en: 'Sixth Prize' });
+
+    matches.sort((a, b) => a.rank - b.rank);
+    return matches;
+  }
+
+  // ------------------------------------------------------------------
+  // 2. Image processing helpers (grayscale, Otsu threshold, blob finder)
+  // ------------------------------------------------------------------
+  function toGray(imgData) {
+    const { data, width, height } = imgData;
+    const gray = new Uint8ClampedArray(width * height);
+    for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+      gray[p] = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) | 0;
+    }
+    return gray;
+  }
+
+  function otsuThreshold(gray, indices) {
+    const hist = new Array(256).fill(0);
+    const list = indices || gray;
+    const n = list.length;
+    if (indices) {
+      for (const idx of indices) hist[gray[idx]]++;
+    } else {
+      for (let i = 0; i < n; i++) hist[gray[i]]++;
+    }
+    let sum = 0;
+    for (let t = 0; t < 256; t++) sum += t * hist[t];
+    let sumB = 0, wB = 0, wF = 0, maxVar = -1, threshold = 127;
+    for (let t = 0; t < 256; t++) {
+      wB += hist[t];
+      if (wB === 0) continue;
+      wF = n - wB;
+      if (wF === 0) break;
+      sumB += t * hist[t];
+      const mB = sumB / wB;
+      const mF = (sum - sumB) / wF;
+      const between = wB * wF * (mB - mF) * (mB - mF);
+      if (between > maxVar) { maxVar = between; threshold = t; }
+    }
+    return threshold;
+  }
+
+  // Iterative flood-fill connected component labeling (8-connectivity).
+  function findComponents(mask, width, height, minArea) {
+    const visited = new Uint8Array(width * height);
+    const components = [];
+    const stack = new Int32Array(width * height);
+    for (let start = 0; start < mask.length; start++) {
+      if (!mask[start] || visited[start]) continue;
+      let sp = 0;
+      stack[sp++] = start;
+      visited[start] = 1;
+      let count = 0, sumX = 0, sumY = 0;
+      let minX = width, maxX = 0, minY = height, maxY = 0;
+      while (sp > 0) {
+        const idx = stack[--sp];
+        const x = idx % width, y = (idx / width) | 0;
+        count++; sumX += x; sumY += y;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = x + dx, ny = y + dy;
+            if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+            const nidx = ny * width + nx;
+            if (mask[nidx] && !visited[nidx]) {
+              visited[nidx] = 1;
+              stack[sp++] = nidx;
+            }
+          }
+        }
+      }
+      if (count >= (minArea || 1)) {
+        components.push({
+          area: count,
+          minX, maxX, minY, maxY,
+          cx: sumX / count, cy: sumY / count,
+          w: maxX - minX + 1,
+          h: maxY - minY + 1,
+        });
+      }
+    }
+    return components;
+  }
+
+  function iou(a, b) {
+    const x1 = Math.max(a.minX, b.minX), x2 = Math.min(a.maxX, b.maxX);
+    const y1 = Math.max(a.minY, b.minY), y2 = Math.min(a.maxY, b.maxY);
+    if (x2 < x1 || y2 < y1) return 0;
+    const inter = (x2 - x1 + 1) * (y2 - y1 + 1);
+    const areaA = a.w * a.h, areaB = b.w * b.h;
+    return inter / (areaA + areaB - inter);
+  }
+
+  // Find up to 6 dice-shaped bright blobs in a grayscale frame.
+  function detectDiceBoxes(gray, width, height, thresholdAdjust) {
+    const threshold = otsuThreshold(gray) + thresholdAdjust;
+    const mask = new Uint8Array(width * height);
+    for (let i = 0; i < gray.length; i++) mask[i] = gray[i] > threshold ? 1 : 0;
+
+    const frameArea = width * height;
+    const minArea = frameArea * 0.006;
+    const maxArea = frameArea * 0.16;
+    let comps = findComponents(mask, width, height, minArea).filter((c) => {
+      if (c.area > maxArea) return false;
+      const aspect = c.w / c.h;
+      if (aspect < 0.55 || aspect > 1.8) return false;
+      const fill = c.area / (c.w * c.h);
+      if (fill < 0.45) return false;
+      if (c.w > width * 0.55 || c.h > height * 0.55) return false;
+      return true;
+    });
+
+    // Two dice resting against each other in the bowl can look like one
+    // squarish blob roughly double the size of a single die, and would
+    // otherwise be mistaken for one die. Use the median size among the
+    // candidates to flag (and drop) suspiciously oversized ones instead of
+    // silently mis-reading them, so the UI can ask the user to nudge the
+    // dice apart.
+    let mergedSuspectCount = 0;
+    if (comps.length >= 3) {
+      const areas = comps.map((c) => c.area).sort((a, b) => a - b);
+      const median = areas[Math.floor(areas.length / 2)];
+      const kept = comps.filter((c) => c.area <= median * 1.6);
+      mergedSuspectCount = comps.length - kept.length;
+      comps = kept;
+    }
+
+    comps.sort((a, b) => b.area - a.area);
+    const kept = [];
+    for (const c of comps) {
+      if (kept.length >= 6) break;
+      if (kept.some((k) => iou(k, c) > 0.25)) continue;
+      kept.push(c);
+    }
+    kept.mergedSuspectCount = mergedSuspectCount;
+    return kept;
+  }
+
+  // Count pips inside one die's bounding box, using the ORIGINAL (color)
+  // frame so both black and red pips (both darker than the die face) show up.
+  function countPips(imgData, box) {
+    const { data, width } = imgData;
+    // Small inward margin just to avoid the die's own rounded-corner/bevel
+    // shadow right at the crop edge; pip shape filtering (below) does the
+    // real work of separating real pips from the die's outline.
+    const marginX = Math.round(box.w * 0.06);
+    const marginY = Math.round(box.h * 0.06);
+    const x0 = box.minX + marginX, x1 = box.maxX - marginX;
+    const y0 = box.minY + marginY, y1 = box.maxY - marginY;
+    const w = Math.max(1, x1 - x0 + 1), h = Math.max(1, y1 - y0 + 1);
+    if (w < 6 || h < 6) return { count: 0, confident: false };
+
+    const cropGray = new Uint8ClampedArray(w * h);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const srcIdx = ((y0 + y) * width + (x0 + x)) * 4;
+        const r = data[srcIdx], g = data[srcIdx + 1], b = data[srcIdx + 2];
+        cropGray[y * w + x] = (r * 0.299 + g * 0.587 + b * 0.114) | 0;
+      }
+    }
+    const threshold = otsuThreshold(cropGray);
+    const mask = new Uint8Array(w * h);
+    for (let i = 0; i < cropGray.length; i++) mask[i] = cropGray[i] <= threshold ? 1 : 0;
+
+    const cropArea = w * h;
+    const candidates = findComponents(mask, w, h, Math.max(2, cropArea * 0.003)).filter((c) => {
+      // Discard components that are clearly not a pip at all: a thin
+      // outline/shadow ring hugging the die's edge (low fill ratio) or a
+      // blob covering most of the face (mis-thresholded background).
+      const fill = c.area / (c.w * c.h);
+      if (c.w > w * 0.85 && c.h > h * 0.85) return false;
+      if (fill < 0.45) return false;
+      if (c.area > cropArea * 0.6) return false;
+      return true;
+    });
+
+    if (candidates.length === 0) return { count: 0, confident: false };
+
+    // Neighboring pips can blur/touch into one connected blob (especially
+    // the 3-in-a-row side of a "6"), so rather than trust the raw component
+    // count, estimate how many pip-widths of area each blob covers against
+    // a reference single-pip size, and sum those estimates.
+    const refDiameter = 0.26 * Math.min(w, h);
+    const refArea = Math.max(3, Math.PI * (refDiameter / 2) * (refDiameter / 2));
+    let count = 0;
+    for (const c of candidates) {
+      count += Math.max(1, Math.round(c.area / refArea));
+    }
+    count = Math.min(6, count);
+    const confident = count >= 1 && count <= 6;
+    return { count, confident };
+  }
+
+  // ------------------------------------------------------------------
+  // 3. UI wiring
+  // ------------------------------------------------------------------
+  const video = document.getElementById('video');
+  const overlay = document.getElementById('overlay');
+  const ctx = overlay.getContext('2d', { willReadFrequently: true });
+  const btnStart = document.getElementById('btnStart');
+  const btnSwitch = document.getElementById('btnSwitch');
+  const btnPause = document.getElementById('btnPause');
+  const statusLine = document.getElementById('statusLine');
+  const diceRow = document.getElementById('diceRow');
+  const resultBox = document.getElementById('resultBox');
+  const extraMatches = document.getElementById('extraMatches');
+  const thresholdAdjustEl = document.getElementById('thresholdAdjust');
+  const procWidthEl = document.getElementById('procWidth');
+
+  let stream = null;
+  let facingMode = 'environment';
+  let running = false;
+  let detectTimer = null;
+  let lastValuesKey = null;
+  let stableCount = 0;
+  let lastBoxes = [];
+  let currentValues = new Array(6).fill(null);
+  let currentConfidences = new Array(6).fill(true);
+  let currentPw = 0, currentPh = 0;
+
+  const dieChips = Array.from(diceRow.querySelectorAll('.die-chip'));
+
+  function setChips(values, confidences) {
+    for (let i = 0; i < 6; i++) {
+      const chip = dieChips[i];
+      const v = values[i];
+      if (v == null) {
+        chip.textContent = '?';
+        chip.className = 'die-chip empty';
+      } else {
+        chip.textContent = v;
+        chip.className = 'die-chip ' + (confidences && confidences[i] === false ? 'unsure' : 'confident');
+      }
+    }
+  }
+
+  function renderResult(values) {
+    const complete = values.every((v) => v != null);
+    if (!complete) {
+      resultBox.innerHTML = '<div class="none">等待识别 6 颗骰子…</div>';
+      extraMatches.innerHTML = '';
+      return;
+    }
+    const matches = computePrizes(values);
+    if (matches.length === 0) {
+      resultBox.innerHTML = '<div class="none">这轮没中奖，再来一次！</div>';
+      extraMatches.innerHTML = '';
+      return;
+    }
+    const top = matches[0];
+    resultBox.innerHTML =
+      `<div class="top-name">🎉 ${top.zh}</div><div class="top-en">${top.en}</div>`;
+    if (matches.length > 1) {
+      extraMatches.innerHTML = '同时中：' +
+        matches.slice(1).map((m) => `<span>${m.zh}</span>`).join('');
+    } else {
+      extraMatches.innerHTML = '';
+    }
+  }
+
+  function resizeOverlay() {
+    const rect = overlay.parentElement.getBoundingClientRect();
+    overlay.width = rect.width;
+    overlay.height = rect.height;
+  }
+  window.addEventListener('resize', resizeOverlay);
+
+  async function startCamera() {
+    try {
+      statusLine.textContent = '正在请求摄像头权限…';
+      if (stream) stream.getTracks().forEach((t) => t.stop());
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode, width: { ideal: 1280 }, height: { ideal: 960 } },
+        audio: false,
+      });
+      video.srcObject = stream;
+      await video.play();
+      resizeOverlay();
+      btnSwitch.disabled = false;
+      btnPause.disabled = false;
+      btnPause.textContent = '暂停识别';
+      running = true;
+      statusLine.textContent = '识别中…把碗放进画面正中间';
+      loop();
+    } catch (err) {
+      statusLine.textContent = '无法打开摄像头：' + err.message;
+    }
+  }
+
+  function loop() {
+    if (detectTimer) clearTimeout(detectTimer);
+    detectTimer = setTimeout(async () => {
+      if (running) {
+        try { detectOnce(); } catch (e) { /* keep looping even if one frame errors */ }
+      }
+      loop();
+    }, 350);
+  }
+
+  function detectOnce() {
+    if (!video.videoWidth) return;
+    const procWidth = parseInt(procWidthEl.value, 10);
+    const scale = procWidth / video.videoWidth;
+    const pw = procWidth;
+    const ph = Math.round(video.videoHeight * scale);
+    currentPw = pw; currentPh = ph;
+
+    const proc = document.createElement('canvas');
+    proc.width = pw; proc.height = ph;
+    const pctx = proc.getContext('2d', { willReadFrequently: true });
+    pctx.drawImage(video, 0, 0, pw, ph);
+    const imgData = pctx.getImageData(0, 0, pw, ph);
+    const gray = toGray(imgData);
+    const thresholdAdjust = parseInt(thresholdAdjustEl.value, 10);
+    const boxes = detectDiceBoxes(gray, pw, ph, thresholdAdjust);
+    lastBoxes = boxes;
+
+    const values = new Array(6).fill(null);
+    const confidences = new Array(6).fill(true);
+    boxes.forEach((box, i) => {
+      const { count, confident } = countPips(imgData, box);
+      values[i] = confident ? count : count || 1;
+      confidences[i] = confident;
+    });
+    currentValues = values;
+    currentConfidences = confidences;
+
+    drawOverlay(boxes, values, confidences, pw, ph);
+    setChips(values, confidences);
+    if (boxes.mergedSuspectCount) {
+      statusLine.textContent = `已识别 ${boxes.length}/6 颗骰子 · 似乎有骰子叠在一起，请用手轻轻拨开再试`;
+    } else {
+      statusLine.textContent = `已识别 ${boxes.length}/6 颗骰子`;
+    }
+
+    const allConfident = boxes.length === 6 && confidences.every(Boolean);
+    if (allConfident) {
+      const key = [...values].sort().join(',');
+      if (key === lastValuesKey) {
+        stableCount++;
+      } else {
+        stableCount = 1;
+        lastValuesKey = key;
+      }
+      if (stableCount >= 2) {
+        renderResult(values);
+      }
+    } else {
+      stableCount = 0;
+      lastValuesKey = null;
+    }
+  }
+
+  function drawOverlay(boxes, values, confidences, pw, ph) {
+    const scaleX = overlay.width / pw;
+    const scaleY = overlay.height / ph;
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+    ctx.drawImage(video, 0, 0, overlay.width, overlay.height);
+    boxes.forEach((box, i) => {
+      const x = box.minX * scaleX, y = box.minY * scaleY;
+      const w = box.w * scaleX, h = box.h * scaleY;
+      ctx.strokeStyle = confidences[i] ? '#52c98c' : '#f2b134';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(x, y, w, h);
+      ctx.fillStyle = confidences[i] ? '#52c98c' : '#f2b134';
+      ctx.font = 'bold 22px sans-serif';
+      ctx.fillText(String(values[i] ?? '?'), x + 4, y + 22);
+    });
+  }
+
+  overlay.addEventListener('click', (e) => {
+    if (!lastBoxes.length || !currentPw) return;
+    // Tapping a die freezes the current frame first: while the live loop
+    // keeps re-detecting, a box's index can refer to a different physical
+    // die from one tick to the next (boxes are re-sorted by size each
+    // frame), so editing "in place" while still running would silently
+    // correct the wrong die. Freezing removes that ambiguity.
+    if (running) {
+      running = false;
+      btnPause.textContent = '继续识别';
+      statusLine.textContent = '已暂停，点击方框可修正点数';
+    }
+    const rect = overlay.getBoundingClientRect();
+    const clickX = (e.clientX - rect.left) * (overlay.width / rect.width);
+    const clickY = (e.clientY - rect.top) * (overlay.height / rect.height);
+    const scale = overlay.width / currentPw;
+    lastBoxes.forEach((box, i) => {
+      const x = box.minX * scale, y = box.minY * scale;
+      const w = box.w * scale, h = box.h * scale;
+      if (clickX >= x && clickX <= x + w && clickY >= y && clickY <= y + h) {
+        const current = currentValues[i] || 1;
+        currentValues[i] = (current % 6) + 1;
+        currentConfidences[i] = true;
+        drawOverlay(lastBoxes, currentValues, currentConfidences, currentPw, currentPh);
+        setChips(currentValues, currentConfidences);
+        renderResult(currentValues);
+      }
+    });
+  });
+
+  btnStart.addEventListener('click', () => {
+    startCamera();
+  });
+
+  btnSwitch.addEventListener('click', () => {
+    facingMode = facingMode === 'environment' ? 'user' : 'environment';
+    startCamera();
+  });
+
+  btnPause.addEventListener('click', () => {
+    running = !running;
+    btnPause.textContent = running ? '暂停识别' : '继续识别';
+    statusLine.textContent = running ? '识别中…' : '已暂停，点击方框可修正点数';
+    if (running) stableCount = 0;
+  });
+
+  // Manual entry fallback
+  const manualSelects = Array.from(document.querySelectorAll('.manual-die'));
+  manualSelects.forEach((sel) => {
+    for (let v = 1; v <= 6; v++) {
+      const opt = document.createElement('option');
+      opt.value = v; opt.textContent = v + ' 点';
+      if (v === 4) opt.selected = true;
+      sel.appendChild(opt);
+    }
+  });
+  document.getElementById('btnManualCompute').addEventListener('click', () => {
+    const values = manualSelects.map((s) => parseInt(s.value, 10));
+    running = false;
+    if (btnPause) { btnPause.textContent = '继续识别'; }
+    setChips(values, values.map(() => true));
+    renderResult(values);
+  });
+})();
+</script>
+</body>
+</html>
