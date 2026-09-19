@@ -248,7 +248,7 @@
     <div class="camera-wrap">
       <video id="video" playsinline muted autoplay></video>
       <canvas id="overlay"></canvas>
-      <div class="camera-hint">提示：骰子放在深色碗/垫子上、光线均匀，识别更准。点击骰子上的方框可手动纠正点数。</div>
+      <div class="camera-hint">提示：光线均匀、避免强反光和阴影，点数尽量朝上摆清楚，识别更准。点击骰子上的方框可手动纠正点数。</div>
     </div>
     <div class="btn-row">
       <button id="btnStart" class="primary">开始摄像头</button>
@@ -260,7 +260,7 @@
     <details style="margin-top:10px;">
       <summary>识别参数（识别不准时可调整）</summary>
       <label class="field">
-        亮度阈值微调
+        识别灵敏度（点数认不出时调低）
         <input type="range" id="thresholdAdjust" min="-60" max="60" value="0" step="2" />
       </label>
       <label class="field">
@@ -366,8 +366,16 @@
   }
 
   // ------------------------------------------------------------------
-  // 2. Image processing helpers (grayscale, Otsu threshold, blob finder)
+  // 2. Image processing: find dice by clustering dark pips
   // ------------------------------------------------------------------
+  // Strategy: rather than first finding each die's bright face (which fails
+  // when the bowl is about as light as the dice -- a real problem, since
+  // 博饼 is traditionally played with white dice in a white porcelain
+  // bowl), find every dark pip in the whole frame using a LOCAL adaptive
+  // threshold, then cluster nearby pips into groups of up to 6 -- one
+  // group per die. This works regardless of whether the background is
+  // light or dark, since each pixel is only ever compared to its own
+  // neighborhood, never to the frame's overall brightness.
   function toGray(imgData) {
     const { data, width, height } = imgData;
     const gray = new Uint8ClampedArray(width * height);
@@ -377,30 +385,41 @@
     return gray;
   }
 
-  function otsuThreshold(gray, indices) {
-    const hist = new Array(256).fill(0);
-    const list = indices || gray;
-    const n = list.length;
-    if (indices) {
-      for (const idx of indices) hist[gray[idx]]++;
-    } else {
-      for (let i = 0; i < n; i++) hist[gray[i]]++;
+  function buildIntegralImage(gray, width, height) {
+    const integral = new Float64Array((width + 1) * (height + 1));
+    for (let y = 0; y < height; y++) {
+      let rowSum = 0;
+      for (let x = 0; x < width; x++) {
+        rowSum += gray[y * width + x];
+        integral[(y + 1) * (width + 1) + (x + 1)] = integral[y * (width + 1) + (x + 1)] + rowSum;
+      }
     }
-    let sum = 0;
-    for (let t = 0; t < 256; t++) sum += t * hist[t];
-    let sumB = 0, wB = 0, wF = 0, maxVar = -1, threshold = 127;
-    for (let t = 0; t < 256; t++) {
-      wB += hist[t];
-      if (wB === 0) continue;
-      wF = n - wB;
-      if (wF === 0) break;
-      sumB += t * hist[t];
-      const mB = sumB / wB;
-      const mF = (sum - sumB) / wF;
-      const between = wB * wF * (mB - mF) * (mB - mF);
-      if (between > maxVar) { maxVar = between; threshold = t; }
+    return integral;
+  }
+
+  function boxSum(integral, width, x0, y0, x1, y1) {
+    const s = width + 1;
+    return integral[(y1 + 1) * s + (x1 + 1)] - integral[y0 * s + (x1 + 1)] -
+      integral[(y1 + 1) * s + x0] + integral[y0 * s + x0];
+  }
+
+  // A pixel is a "dark candidate" (pip, shadow, edge...) when it's notably
+  // darker than the mean brightness of its own local neighborhood -- this
+  // reacts to local contrast, not the frame's overall brightness, so it
+  // finds dark pips on both light and dark dice/bowls alike.
+  function localDarkMask(gray, width, height, radius, k) {
+    const integral = buildIntegralImage(gray, width, height);
+    const mask = new Uint8Array(width * height);
+    for (let y = 0; y < height; y++) {
+      const y0 = Math.max(0, y - radius), y1 = Math.min(height - 1, y + radius);
+      for (let x = 0; x < width; x++) {
+        const x0 = Math.max(0, x - radius), x1 = Math.min(width - 1, x + radius);
+        const count = (x1 - x0 + 1) * (y1 - y0 + 1);
+        const mean = boxSum(integral, width, x0, y0, x1, y1) / count;
+        mask[y * width + x] = gray[y * width + x] < mean * k ? 1 : 0;
+      }
     }
-    return threshold;
+    return mask;
   }
 
   // Iterative flood-fill connected component labeling (8-connectivity).
@@ -449,113 +468,97 @@
     return components;
   }
 
-  function iou(a, b) {
-    const x1 = Math.max(a.minX, b.minX), x2 = Math.min(a.maxX, b.maxX);
-    const y1 = Math.max(a.minY, b.minY), y2 = Math.min(a.maxY, b.maxY);
-    if (x2 < x1 || y2 < y1) return 0;
-    const inter = (x2 - x1 + 1) * (y2 - y1 + 1);
-    const areaA = a.w * a.h, areaB = b.w * b.h;
-    return inter / (areaA + areaB - inter);
+  function makeUnionFind(n) {
+    const parent = new Int32Array(n);
+    for (let i = 0; i < n; i++) parent[i] = i;
+    function find(x) { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
+    function union(a, b) { const ra = find(a), rb = find(b); if (ra !== rb) parent[ra] = rb; }
+    return { find, union };
   }
 
-  // Find up to 6 dice-shaped bright blobs in a grayscale frame.
-  function detectDiceBoxes(gray, width, height, thresholdAdjust) {
-    const threshold = otsuThreshold(gray) + thresholdAdjust;
-    const mask = new Uint8Array(width * height);
-    for (let i = 0; i < gray.length; i++) mask[i] = gray[i] > threshold ? 1 : 0;
+  // Find up to 6 dice by locating dark pips and clustering nearby ones.
+  // sensitivity in [-60, 60] (from the UI slider): negative = more lenient
+  // (catches faint/blurry pips at the cost of more noise), positive = stricter.
+  function detectDice(gray, width, height, sensitivity) {
+    const k = 0.82 + (sensitivity || 0) / 300;
+    const radius = Math.max(3, Math.round(Math.min(width, height) * 0.02));
+    const clusterFactor = 3.4;
 
+    const mask = localDarkMask(gray, width, height, radius, k);
     const frameArea = width * height;
-    const minArea = frameArea * 0.006;
-    const maxArea = frameArea * 0.16;
-    let comps = findComponents(mask, width, height, minArea).filter((c) => {
-      if (c.area > maxArea) return false;
+    const candidates = findComponents(mask, width, height, Math.max(2, frameArea * 0.00005)).filter((c) => {
+      if (c.area > frameArea * 0.02) return false;
       const aspect = c.w / c.h;
-      if (aspect < 0.55 || aspect > 1.8) return false;
+      if (aspect < 0.25 || aspect > 4) return false;
+      // A real pip (or a chain of touching pips) has a fill ratio around
+      // 0.59 regardless of chain length. A thin "halo" ring -- a local-
+      // threshold false positive along the boundary of any bright object
+      // sitting on a dark background -- is squarish but much less filled
+      // (~0.4), so fill ratio is what actually separates the two.
       const fill = c.area / (c.w * c.h);
-      if (fill < 0.45) return false;
-      if (c.w > width * 0.55 || c.h > height * 0.55) return false;
+      if (fill < 0.5) return false;
       return true;
     });
+    if (candidates.length === 0) return [];
 
-    // Two dice resting against each other in the bowl can look like one
-    // squarish blob roughly double the size of a single die, and would
-    // otherwise be mistaken for one die. Use the median size among the
-    // candidates to flag (and drop) suspiciously oversized ones instead of
-    // silently mis-reading them, so the UI can ask the user to nudge the
-    // dice apart.
-    let mergedSuspectCount = 0;
-    if (comps.length >= 3) {
-      const areas = comps.map((c) => c.area).sort((a, b) => a - b);
-      const median = areas[Math.floor(areas.length / 2)];
-      const kept = comps.filter((c) => c.area <= median * 1.6);
-      mergedSuspectCount = comps.length - kept.length;
-      comps = kept;
-    }
+    // A single pip's short axis stays roughly constant even when 2-3 pips
+    // in a row blur/touch into one blob (only the long axis grows), so use
+    // each blob's OWN min(w,h) as a per-blob pip-scale estimate. This
+    // avoids depending on a scene-wide "typical pip size" statistic, which
+    // breaks down when the frame happens to contain mostly merged blobs
+    // and no lone pip to calibrate against (e.g. several dice showing 6).
+    candidates.forEach((c) => { c.pipScale = Math.min(c.w, c.h); });
 
-    comps.sort((a, b) => b.area - a.area);
-    const kept = [];
-    for (const c of comps) {
-      if (kept.length >= 6) break;
-      if (kept.some((k) => iou(k, c) > 0.25)) continue;
-      kept.push(c);
-    }
-    kept.mergedSuspectCount = mergedSuspectCount;
-    return kept;
-  }
-
-  // Count pips inside one die's bounding box, using the ORIGINAL (color)
-  // frame so both black and red pips (both darker than the die face) show up.
-  function countPips(imgData, box) {
-    const { data, width } = imgData;
-    // Small inward margin just to avoid the die's own rounded-corner/bevel
-    // shadow right at the crop edge; pip shape filtering (below) does the
-    // real work of separating real pips from the die's outline.
-    const marginX = Math.round(box.w * 0.06);
-    const marginY = Math.round(box.h * 0.06);
-    const x0 = box.minX + marginX, x1 = box.maxX - marginX;
-    const y0 = box.minY + marginY, y1 = box.maxY - marginY;
-    const w = Math.max(1, x1 - x0 + 1), h = Math.max(1, y1 - y0 + 1);
-    if (w < 6 || h < 6) return { count: 0, confident: false };
-
-    const cropGray = new Uint8ClampedArray(w * h);
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const srcIdx = ((y0 + y) * width + (x0 + x)) * 4;
-        const r = data[srcIdx], g = data[srcIdx + 1], b = data[srcIdx + 2];
-        cropGray[y * w + x] = (r * 0.299 + g * 0.587 + b * 0.114) | 0;
+    const uf = makeUnionFind(candidates.length);
+    for (let i = 0; i < candidates.length; i++) {
+      for (let j = i + 1; j < candidates.length; j++) {
+        const dx = candidates[i].cx - candidates[j].cx;
+        const dy = candidates[i].cy - candidates[j].cy;
+        const localScale = (candidates[i].pipScale + candidates[j].pipScale) / 2;
+        if (Math.sqrt(dx * dx + dy * dy) < localScale * clusterFactor) uf.union(i, j);
       }
     }
-    const threshold = otsuThreshold(cropGray);
-    const mask = new Uint8Array(w * h);
-    for (let i = 0; i < cropGray.length; i++) mask[i] = cropGray[i] <= threshold ? 1 : 0;
 
-    const cropArea = w * h;
-    const candidates = findComponents(mask, w, h, Math.max(2, cropArea * 0.003)).filter((c) => {
-      // Discard components that are clearly not a pip at all: a thin
-      // outline/shadow ring hugging the die's edge (low fill ratio) or a
-      // blob covering most of the face (mis-thresholded background).
-      const fill = c.area / (c.w * c.h);
-      if (c.w > w * 0.85 && c.h > h * 0.85) return false;
-      if (fill < 0.45) return false;
-      if (c.area > cropArea * 0.6) return false;
-      return true;
+    const groups = new Map();
+    candidates.forEach((c, i) => {
+      const root = uf.find(i);
+      if (!groups.has(root)) groups.set(root, []);
+      groups.get(root).push(c);
     });
 
-    if (candidates.length === 0) return { count: 0, confident: false };
-
-    // Neighboring pips can blur/touch into one connected blob (especially
-    // the 3-in-a-row side of a "6"), so rather than trust the raw component
-    // count, estimate how many pip-widths of area each blob covers against
-    // a reference single-pip size, and sum those estimates.
-    const refDiameter = 0.26 * Math.min(w, h);
-    const refArea = Math.max(3, Math.PI * (refDiameter / 2) * (refDiameter / 2));
-    let count = 0;
-    for (const c of candidates) {
-      count += Math.max(1, Math.round(c.area / refArea));
+    let dice = [];
+    for (const members of groups.values()) {
+      let count = 0, minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      let areaSum = 0, scaleSum = 0;
+      for (const m of members) {
+        // Elongation (long axis / short axis) estimates how many pips are
+        // chained in one touching blob -- e.g. a blob 3x taller than it is
+        // wide is 3 pips merged in a column. Needs no scene-wide calibration.
+        count += Math.max(1, Math.round(Math.max(m.w, m.h) / m.pipScale));
+        minX = Math.min(minX, m.minX); minY = Math.min(minY, m.minY);
+        maxX = Math.max(maxX, m.maxX); maxY = Math.max(maxY, m.maxY);
+        areaSum += m.area;
+        scaleSum += m.pipScale;
+      }
+      const valid = count >= 1 && count <= 6;
+      const pad = Math.round((scaleSum / members.length) * 1.3);
+      dice.push({
+        count, valid, areaSum,
+        minX: Math.max(0, minX - pad), minY: Math.max(0, minY - pad),
+        maxX: Math.min(width - 1, maxX + pad), maxY: Math.min(height - 1, maxY + pad),
+      });
     }
-    count = Math.min(6, count);
-    const confident = count >= 1 && count <= 6;
-    return { count, confident };
+
+    // A cluster with more than 6 pips is almost always two dice touching
+    // in the bowl (their nearest pips ended up close enough to merge),
+    // rather than one real die -- flag it instead of silently mis-scoring.
+    const mergedSuspectCount = dice.filter((d) => !d.valid).length;
+    dice = dice.filter((d) => d.valid);
+    dice.sort((a, b) => b.areaSum - a.areaSum);
+    dice = dice.slice(0, 6);
+    dice.forEach((d) => { d.w = d.maxX - d.minX + 1; d.h = d.maxY - d.minY + 1; });
+    dice.mergedSuspectCount = mergedSuspectCount;
+    return dice;
   }
 
   // ------------------------------------------------------------------
@@ -678,16 +681,15 @@
     pctx.drawImage(video, 0, 0, pw, ph);
     const imgData = pctx.getImageData(0, 0, pw, ph);
     const gray = toGray(imgData);
-    const thresholdAdjust = parseInt(thresholdAdjustEl.value, 10);
-    const boxes = detectDiceBoxes(gray, pw, ph, thresholdAdjust);
+    const sensitivity = parseInt(thresholdAdjustEl.value, 10);
+    const boxes = detectDice(gray, pw, ph, sensitivity);
     lastBoxes = boxes;
 
     const values = new Array(6).fill(null);
     const confidences = new Array(6).fill(true);
     boxes.forEach((box, i) => {
-      const { count, confident } = countPips(imgData, box);
-      values[i] = confident ? count : count || 1;
-      confidences[i] = confident;
+      values[i] = box.count;
+      confidences[i] = true;
     });
     currentValues = values;
     currentConfidences = confidences;
