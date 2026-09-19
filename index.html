@@ -486,7 +486,7 @@
 
     const mask = localDarkMask(gray, width, height, radius, k);
     const frameArea = width * height;
-    const candidates = findComponents(mask, width, height, Math.max(2, frameArea * 0.00005)).filter((c) => {
+    let candidates = findComponents(mask, width, height, Math.max(3, frameArea * 0.0002)).filter((c) => {
       if (c.area > frameArea * 0.02) return false;
       const aspect = c.w / c.h;
       if (aspect < 0.25 || aspect > 4) return false;
@@ -500,6 +500,17 @@
       return true;
     });
     if (candidates.length === 0) return [];
+
+    // A decorative bowl pattern or a glare/reflection edge can produce a
+    // squarish, reasonably-filled blob that still passes the checks above
+    // but is far bigger than any real pip in the frame (seen in testing: a
+    // highlight streak on a glossy bowl produced an ~800px blob against a
+    // ~30px real pip). Real pips on the same dice are all similar in size,
+    // so cap out anything wildly larger than the pack's own median instead
+    // of guessing a fixed size.
+    const sortedAreas = candidates.map((c) => c.area).sort((a, b) => a - b);
+    const medianArea = sortedAreas[Math.floor(sortedAreas.length / 2)];
+    candidates = candidates.filter((c) => c.area <= medianArea * 10);
 
     // A single pip's short axis stays roughly constant even when 2-3 pips
     // in a row blur/touch into one blob (only the long axis grows), so use
@@ -696,11 +707,22 @@
 
     drawOverlay(boxes, values, confidences, pw, ph);
     setChips(values, confidences);
+
+    // A merged-suspect blob almost always means some dice are touching in
+    // the bowl, which can also spill noise into the OTHER "valid" groups
+    // nearby (a decorative bowl pattern or a glare edge near the touching
+    // dice can get swept in too) -- so don't present whatever the 6 boxes
+    // currently say as if it were a trustworthy reading. Require a clean,
+    // suspect-free 6/6 before it's eligible to become the stable result.
     if (boxes.mergedSuspectCount) {
-      statusLine.textContent = `已识别 ${boxes.length}/6 颗骰子 · 似乎有骰子叠在一起，请用手轻轻拨开再试`;
-    } else {
-      statusLine.textContent = `已识别 ${boxes.length}/6 颗骰子`;
+      statusLine.textContent = `检测到骰子可能粘在一起，请用手轻轻拨开再试（已识别 ${boxes.length}/6）`;
+      stableCount = 0;
+      lastValuesKey = null;
+      resultBox.innerHTML = '<div class="none">骰子粘在一起，结果不可靠——拨开一点，或点方框手动纠正</div>';
+      extraMatches.innerHTML = '';
+      return;
     }
+    statusLine.textContent = `已识别 ${boxes.length}/6 颗骰子`;
 
     const allConfident = boxes.length === 6 && confidences.every(Boolean);
     if (allConfident) {
